@@ -1,36 +1,29 @@
 package eu.ehri.project;
 
-/**
- * @author Mike Bryant (http://github.com/mikesname)
- */
 import io.dropwizard.Configuration;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.hibernate.validator.constraints.NotEmpty;
+import org.neo4j.graphdb.GraphDatabaseService;
+import org.neo4j.graphdb.factory.GraphDatabaseFactory;
 
 public class BackendConfiguration extends Configuration {
+
+    public GraphDatabaseService getGraphDatabase() {
+        return new GraphDatabaseFactory()
+                .newEmbeddedDatabaseBuilder(getDbPath())
+                .newGraphDatabase();
+    }
+
     @NotEmpty
-    private String template;
+    private String dbPath;
 
-    @NotEmpty
-    private String defaultName = "EhriBackend";
-
-    @JsonProperty
-    public String getTemplate() {
-        return template;
+    @JsonProperty("dbPath")
+    public String getDbPath() {
+        return dbPath;
     }
 
     @JsonProperty
-    public void setTemplate(String template) {
-        this.template = template;
-    }
-
-    @JsonProperty
-    public String getDefaultName() {
-        return defaultName;
-    }
-
-    @JsonProperty
-    public void setDefaultName(String name) {
-        this.defaultName = name;
+    public void setDbPath(String dbPath) {
+        this.dbPath = dbPath;
     }
 }

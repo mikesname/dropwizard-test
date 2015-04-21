@@ -1,34 +1,196 @@
 package eu.ehri.project.resources;
 
 
-import com.google.common.base.Optional;
-import com.codahale.metrics.annotation.Timed;
-import eu.ehri.project.core.Document;
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.common.collect.Iterators;
+import com.google.common.collect.Maps;
+import eu.ehri.project.core.Bundle;
+import eu.ehri.project.core.Type;
+import org.neo4j.graphdb.DynamicLabel;
+import org.neo4j.graphdb.GraphDatabaseService;
+import org.neo4j.graphdb.Node;
+import org.neo4j.graphdb.ResourceIterator;
+import org.neo4j.graphdb.Transaction;
+import org.neo4j.graphdb.schema.Schema;
 
+import javax.servlet.http.HttpServletResponse;
+import javax.validation.Valid;
+import javax.validation.constraints.NotNull;
+import javax.ws.rs.Consumes;
+import javax.ws.rs.DELETE;
 import javax.ws.rs.GET;
+import javax.ws.rs.NotFoundException;
+import javax.ws.rs.POST;
+import javax.ws.rs.PUT;
 import javax.ws.rs.Path;
+import javax.ws.rs.PathParam;
 import javax.ws.rs.Produces;
-import javax.ws.rs.QueryParam;
+import javax.ws.rs.WebApplicationException;
+import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
-import java.util.concurrent.atomic.AtomicLong;
+import javax.ws.rs.core.Response;
+import javax.ws.rs.core.StreamingOutput;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.util.Map;
 
-@Path("/doc")
+
+@Path("/ehri")
+@Consumes(MediaType.APPLICATION_JSON)
 @Produces(MediaType.APPLICATION_JSON)
 public class BackendResource {
-    private final String template;
-    private final String defaultName;
-    private final AtomicLong counter;
 
-    public BackendResource(String template, String defaultName) {
-        this.template = template;
-        this.defaultName = defaultName;
-        this.counter = new AtomicLong();
+    private static final JsonFactory jsonFactory = new JsonFactory();
+    private static final ObjectMapper mapper = new ObjectMapper();
+
+    public static final String ID_KEY = "_id";
+
+    private final GraphDatabaseService graphDb;
+
+    @Context
+    private HttpServletResponse response;
+
+    public BackendResource(GraphDatabaseService graphDb) {
+        this.graphDb = graphDb;
+    }
+
+    private Bundle serialize(Node node) {
+        String id = (String) node.getProperty(ID_KEY);
+        Type type = Type.valueOf(node.getLabels().iterator().next().name());
+        Map<String, Object> data = Maps.newHashMap();
+        for (String key : node.getPropertyKeys()) {
+            if (!key.equals(ID_KEY)) {
+                data.put(key, node.getProperty(key));
+            }
+        }
+        return Bundle.create(id, type, data);
+    }
+
+    @POST
+    @Path("schema")
+    public Response createSchema() {
+        try (Transaction tx = graphDb.beginTx()) {
+            Schema schema = graphDb.schema();
+            for (Type t : Type.values()) {
+                schema.constraintFor(DynamicLabel.label(t.name()))
+                        .assertPropertyIsUnique(ID_KEY)
+                        .create();
+            }
+            tx.success();
+            return Response.ok().build();
+        }
     }
 
     @GET
-    @Timed
-    public Document sayHello(@QueryParam("name") Optional<String> name) {
-        final String value = String.format(template, name.or(defaultName));
-        return new Document(counter.incrementAndGet(), value);
+    @Path("{type}")
+    public StreamingOutput list(@NotNull @PathParam("type") final Type type) {
+        return new StreamingOutput() {
+            @Override
+            public void write(OutputStream outputStream) throws IOException, WebApplicationException {
+                try (JsonGenerator generator = jsonFactory.createGenerator(outputStream)) {
+                    generator.writeStartArray();
+                    try (Transaction tx = graphDb.beginTx();
+                         ResourceIterator<Node> nodes = graphDb.findNodes(DynamicLabel.label(type.name()))) {
+                        while (nodes.hasNext()) {
+                            mapper.writeValue(generator, serialize(nodes.next()));
+                        }
+                        tx.success();
+                    }
+                    generator.writeEndArray();
+                }
+            }
+        };
+    }
+
+    @POST
+    @Path("{type}")
+    public Bundle create(@PathParam("type") Type type, @Valid Bundle bundle) {
+        try (Transaction tx = graphDb.beginTx()) {
+            Node node = graphDb.createNode(DynamicLabel.label(type.name()));
+            node.setProperty(ID_KEY, bundle.getId());
+            for (Map.Entry<String, Object> entry : bundle.getData().entrySet()) {
+                node.setProperty(entry.getKey(), entry.getValue());
+            }
+            Bundle out = serialize(node);
+            tx.success();
+            return out;
+        }
+    }
+
+    @PUT
+    @Path("{type}")
+    public Bundle update(@PathParam("type") Type type, @Valid Bundle bundle) {
+        try (Transaction tx = graphDb.beginTx()) {
+            Node node = graphDb.findNode(
+                    DynamicLabel.label(type.name()), ID_KEY, bundle.getId());
+            for (Map.Entry<String, Object> entry : bundle.getData().entrySet()) {
+                node.setProperty(entry.getKey(), entry.getValue());
+            }
+            for (String key : node.getPropertyKeys()) {
+                if (!key.equals(ID_KEY) && !bundle.getData().containsKey(key)) {
+                    node.removeProperty(key);
+                }
+            }
+            Bundle out = serialize(node);
+            tx.success();
+            return out;
+        }
+    }
+
+    @GET
+    @Path("{type}/{id}")
+    public Bundle get(
+            @NotNull @PathParam("type") Type type,
+            @NotNull @PathParam("id") String id) {
+        try (Transaction tx = graphDb.beginTx()) {
+            Node node = graphDb.findNode(DynamicLabel.label(type.name()), ID_KEY, id);
+            if (node == null) {
+                throw new NotFoundException();
+            }
+            Bundle bundle = serialize(node);
+            tx.success();
+            return bundle;
+        }
+    }
+
+    @DELETE
+    @Path("{type}/{id}")
+    public Response delete(
+            @NotNull @PathParam("type") Type type,
+            @NotNull @PathParam("id") String id) {
+        try (Transaction tx = graphDb.beginTx()) {
+            Node node = graphDb.findNode(DynamicLabel.label(type.name()), ID_KEY, id);
+            node.delete();
+            tx.success();
+            return Response.ok().build();
+        }
+    }
+
+    @GET
+    @Path("{type}/count")
+    public int count(
+            @NotNull @PathParam("type") Type type) {
+        try (Transaction tx = graphDb.beginTx();
+             ResourceIterator<Node> nodes = graphDb.findNodes(DynamicLabel.label(type.name()))) {
+            int size = Iterators.size(nodes);
+            tx.success();
+            return size;
+        }
+    }
+
+    @DELETE
+    @Path("{type}/deleteAll")
+    public Response deleteAll(
+            @NotNull @PathParam("type") Type type) {
+        try (Transaction tx = graphDb.beginTx();
+             ResourceIterator<Node> nodes = graphDb.findNodes(DynamicLabel.label(type.name()))) {
+            while (nodes.hasNext()) {
+                nodes.next().delete();
+            }
+            tx.success();
+            return Response.ok().build();
+        }
     }
 }
