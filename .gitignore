@@ -26,3 +26,6 @@ buildNumber.properties
 ## Directory-based project format:
 .idea/
 
+# Ignore DB
+db
+
