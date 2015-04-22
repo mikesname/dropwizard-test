@@ -5,9 +5,9 @@ import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.collect.Iterators;
-import com.google.common.collect.Maps;
 import eu.ehri.project.core.Bundle;
 import eu.ehri.project.core.Type;
+import eu.ehri.project.core.data.Serializer;
 import org.neo4j.graphdb.DynamicLabel;
 import org.neo4j.graphdb.GraphDatabaseService;
 import org.neo4j.graphdb.Node;
@@ -45,27 +45,15 @@ public class BackendResource {
     private static final JsonFactory jsonFactory = new JsonFactory();
     private static final ObjectMapper mapper = new ObjectMapper();
 
-    public static final String ID_KEY = "_id";
-
     private final GraphDatabaseService graphDb;
+    private final Serializer serializer;
 
     @Context
     private HttpServletResponse response;
 
-    public BackendResource(GraphDatabaseService graphDb) {
+    public BackendResource(GraphDatabaseService graphDb, Serializer serializer) {
         this.graphDb = graphDb;
-    }
-
-    private Bundle serialize(Node node) {
-        String id = (String) node.getProperty(ID_KEY);
-        Type type = Type.valueOf(node.getLabels().iterator().next().name());
-        Map<String, Object> data = Maps.newHashMap();
-        for (String key : node.getPropertyKeys()) {
-            if (!key.equals(ID_KEY)) {
-                data.put(key, node.getProperty(key));
-            }
-        }
-        return Bundle.create(id, type, data);
+        this.serializer = serializer;
     }
 
     @POST
@@ -75,7 +63,7 @@ public class BackendResource {
             Schema schema = graphDb.schema();
             for (Type t : Type.values()) {
                 schema.constraintFor(DynamicLabel.label(t.name()))
-                        .assertPropertyIsUnique(ID_KEY)
+                        .assertPropertyIsUnique(Serializer.ID_KEY)
                         .create();
             }
             tx.success();
@@ -94,7 +82,7 @@ public class BackendResource {
                     try (Transaction tx = graphDb.beginTx();
                          ResourceIterator<Node> nodes = graphDb.findNodes(DynamicLabel.label(type.name()))) {
                         while (nodes.hasNext()) {
-                            mapper.writeValue(generator, serialize(nodes.next()));
+                            mapper.writeValue(generator, serializer.serialize(nodes.next()));
                         }
                         tx.success();
                     }
@@ -109,11 +97,11 @@ public class BackendResource {
     public Bundle create(@PathParam("type") Type type, @Valid Bundle bundle) {
         try (Transaction tx = graphDb.beginTx()) {
             Node node = graphDb.createNode(DynamicLabel.label(type.name()));
-            node.setProperty(ID_KEY, bundle.getId());
+            node.setProperty(Serializer.ID_KEY, bundle.getId());
             for (Map.Entry<String, Object> entry : bundle.getData().entrySet()) {
                 node.setProperty(entry.getKey(), entry.getValue());
             }
-            Bundle out = serialize(node);
+            Bundle out = serializer.serialize(node);
             tx.success();
             return out;
         }
@@ -124,16 +112,16 @@ public class BackendResource {
     public Bundle update(@PathParam("type") Type type, @Valid Bundle bundle) {
         try (Transaction tx = graphDb.beginTx()) {
             Node node = graphDb.findNode(
-                    DynamicLabel.label(type.name()), ID_KEY, bundle.getId());
+                    DynamicLabel.label(type.name()), Serializer.ID_KEY, bundle.getId());
             for (Map.Entry<String, Object> entry : bundle.getData().entrySet()) {
                 node.setProperty(entry.getKey(), entry.getValue());
             }
             for (String key : node.getPropertyKeys()) {
-                if (!key.equals(ID_KEY) && !bundle.getData().containsKey(key)) {
+                if (!key.equals(Serializer.ID_KEY) && !bundle.getData().containsKey(key)) {
                     node.removeProperty(key);
                 }
             }
-            Bundle out = serialize(node);
+            Bundle out = serializer.serialize(node);
             tx.success();
             return out;
         }
@@ -145,11 +133,11 @@ public class BackendResource {
             @NotNull @PathParam("type") Type type,
             @NotNull @PathParam("id") String id) {
         try (Transaction tx = graphDb.beginTx()) {
-            Node node = graphDb.findNode(DynamicLabel.label(type.name()), ID_KEY, id);
+            Node node = graphDb.findNode(DynamicLabel.label(type.name()), Serializer.ID_KEY, id);
             if (node == null) {
                 throw new NotFoundException();
             }
-            Bundle bundle = serialize(node);
+            Bundle bundle = serializer.serialize(node);
             tx.success();
             return bundle;
         }
@@ -161,7 +149,7 @@ public class BackendResource {
             @NotNull @PathParam("type") Type type,
             @NotNull @PathParam("id") String id) {
         try (Transaction tx = graphDb.beginTx()) {
-            Node node = graphDb.findNode(DynamicLabel.label(type.name()), ID_KEY, id);
+            Node node = graphDb.findNode(DynamicLabel.label(type.name()), Serializer.ID_KEY, id);
             node.delete();
             tx.success();
             return Response.ok().build();

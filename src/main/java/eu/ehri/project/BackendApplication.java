@@ -1,5 +1,6 @@
 package eu.ehri.project;
 
+import eu.ehri.project.core.data.Serializer;
 import eu.ehri.project.providers.ConstraintViolationExceptionMapper;
 import eu.ehri.project.resources.BackendDbManager;
 import io.dropwizard.Application;
@@ -29,7 +30,8 @@ public class BackendApplication extends Application<BackendConfiguration> {
     public void run(BackendConfiguration configuration, Environment environment) {
         final GraphDatabaseService graphDb = configuration.getGraphDatabase();
         final BackendDbManager dbManager = new BackendDbManager(graphDb);
-        final BackendResource resource = new BackendResource(graphDb);
+        final BackendResource resource = new BackendResource(graphDb,
+                Serializer.from(configuration.getSerializationConfig()));
         final DatabaseHealthCheck healthCheck = new DatabaseHealthCheck(graphDb);
         environment.healthChecks().register("template", healthCheck);
         environment.jersey().register(resource);

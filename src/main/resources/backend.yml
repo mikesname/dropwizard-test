@@ -1,1 +1,8 @@
-dbPath: "./db"
+dbPath: db
+
+serializationConfig:
+  types:
+    - type: doc
+      fetch:
+        - name: childOf
+          relName: childOf

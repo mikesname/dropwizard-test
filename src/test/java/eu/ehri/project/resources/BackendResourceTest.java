@@ -6,6 +6,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import eu.ehri.project.core.Bundle;
 import eu.ehri.project.core.Type;
+import eu.ehri.project.core.data.Serializer;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -19,7 +20,6 @@ import javax.ws.rs.core.StreamingOutput;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -36,7 +36,7 @@ public class BackendResourceTest {
     @Before
     public void setUp() throws Exception {
         graphDb = new TestGraphDatabaseFactory().newImpermanentDatabase();
-        resource = new BackendResource(graphDb);
+        resource = new BackendResource(graphDb, Serializer.empty());
     }
 
     @After
@@ -48,10 +48,12 @@ public class BackendResourceTest {
     public void testCreateSchema() throws Exception {
         try (Transaction tx = graphDb.beginTx()) {
             assertTrue(Iterables.isEmpty(graphDb.schema().getConstraints()));
+            tx.success();
         }
         resource.createSchema();
         try (Transaction tx = graphDb.beginTx()) {
             assertFalse(Iterables.isEmpty(graphDb.schema().getConstraints()));
+            tx.success();
         }
     }
 
